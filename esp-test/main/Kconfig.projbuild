@@ -1,0 +1,52 @@
+menu "Nodifyr"
+
+config NODIFYR_WIFI_SSID
+    string "WiFi SSID (fallback if not in NVS)"
+    default "myssid"
+
+config NODIFYR_WIFI_PASSWORD
+    string "WiFi password (fallback if not in NVS)"
+    default "mypassword"
+
+config NODIFYR_API_URL
+    string "Telemetry upload URL (full path)"
+    default "https://app.nodifyr.io/api/v1/telemetry"
+    help
+        Nodifyr ingestion endpoint. Local dev example:
+        http://localhost:3000/api/v1/telemetry
+
+config NODIFYR_CLAIM_URL
+    string "Gateway claim API URL"
+    default "https://app.nodifyr.io/api/v1/provision/claim"
+    help
+        POST endpoint to exchange a dashboard setup code for a gateway API key.
+
+config NODIFYR_GATEWAY_API_KEY
+    string "Gateway API key (Phase 1 fallback)"
+    default ""
+    help
+        Per-gateway key from Nodifyr provisioning (ngw_...).
+        Persisted to NVS on first boot. Leave empty to use SoftAP setup.
+
+config NODIFYR_PROVISION_BUTTON_GPIO
+    int "GPIO for forced provisioning (hold 5s at boot)"
+    default 0
+    range 0 48
+    help
+        Heltec PRG/BOOT button is GPIO 0. Hold at boot to enter setup mode.
+
+config NODIFYR_UPLOAD_INTERVAL_SEC
+    int "Upload interval (seconds)"
+    default 60
+    range 5 3600
+    help
+        How often to POST batched readings. 60 = 1 minute.
+
+config NODIFYR_UPLOAD_BATCH_MAX
+    int "Max readings per upload"
+    default 64
+    range 1 64
+    help
+        Must not exceed server limit (64).
+
+endmenu

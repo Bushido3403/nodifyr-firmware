@@ -1,0 +1,17 @@
+{
+    "idf.espIdfPath": "/Users/bushidomac/.espressif/v6.0.1/esp-idf",
+    "idf.toolsPath": "/Users/bushidomac/.espressif",
+    "idf.port": "/dev/cu.usbserial-0001",
+    "idf.pythonInstallPath": "/Users/bushidomac/.espressif/python_env/idf6.0_py3.14_env/bin/python",
+    "idf.flashType": "UART",
+    "idf.openOcdConfigs": [
+        "board/esp32s3-builtin.cfg"
+    ],
+    "clangd.path": "/Users/bushidomac/.espressif/tools/esp-clang/16.0.1-fe4f10a286/esp-clang/bin/clangd",
+    "clangd.arguments": [
+        "--background-index",
+        "--query-driver=**"
+    ],
+    "idf.customExtraVars": {},
+    "idf.currentSetup": "/Users/bushidomac/.espressif/v6.0.1/esp-idf"
+}
