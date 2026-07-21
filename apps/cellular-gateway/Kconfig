@@ -1,0 +1,115 @@
+mainmenu "Nodifyr cellular gateway"
+
+menu "Nodifyr cloud"
+
+config NODIFYR_PAIRING_SECRET
+	string "Factory pairing secret seed (dev only)"
+	default ""
+	help
+	  If Settings flash has no pairing_secret, seed from this value at boot.
+	  Leave empty for release builds. Production devices must be factory-
+	  provisioned into Settings/NVS.
+
+config NODIFYR_CLOUD_HOST
+	string "Nodifyr API hostname"
+	default "app.nodifyr.io"
+	help
+	  Hostname used for TLS SNI and HTTPS requests.
+
+config NODIFYR_PAIR_PATH
+	string "Pair announcement path"
+	default "/api/v1/provision/pair"
+	help
+	  POST path for pairing announcement.
+
+config NODIFYR_STATUS_PATH
+	string "Pair status path"
+	default "/api/v1/provision/pair/status"
+	help
+	  GET path for pairing status poll.
+
+config NODIFYR_DEFAULT_TELEMETRY_URL
+	string "Default telemetry URL"
+	default "https://app.nodifyr.io/api/v1/telemetry"
+	help
+	  Used when approved status omits api_url.
+
+config NODIFYR_TLS_SEC_TAG
+	int "Modem TLS security tag for Nodifyr CA"
+	default 42
+	help
+	  Security tag used when provisioning the ISRG Root X1 CA to the modem
+	  and when opening TLS sockets to app.nodifyr.io.
+
+config NODIFYR_PAIR_POLL_INTERVAL_S
+	int "Pair status poll interval in seconds"
+	default 45
+	range 30 60
+	help
+	  Status poll interval while pending during the first hour.
+
+config NODIFYR_PAIR_POLL_BACKOFF_S
+	int "Pair status poll backoff interval in seconds"
+	default 180
+	range 120 300
+	help
+	  Status poll interval after the first hour of pending.
+
+config NODIFYR_PAIR_POLL_BACKOFF_AFTER_S
+	int "Seconds before pair poll backoff"
+	default 3600
+	help
+	  After this many seconds of pending, switch to the backoff interval.
+
+config NODIFYR_TELEMETRY_QUEUE_SIZE
+	int "In-RAM telemetry queue capacity"
+	default 512
+	range 64 1024
+	help
+	  Ring buffer capacity for radar readings (~25 KB at default size).
+
+config NODIFYR_TELEMETRY_BATCH_MAX
+	int "Max readings per telemetry POST"
+	default 64
+	range 1 64
+	help
+	  Cloud accepts at most 64 readings per batch.
+
+config NODIFYR_TELEMETRY_UPLOAD_INTERVAL_S
+	int "Telemetry upload interval in seconds"
+	default 30
+	range 5 600
+	help
+	  How often NORMAL mode attempts a telemetry upload when the queue
+	  is non-empty.
+
+config NODIFYR_RADAR_STUB_INTERVAL_S
+	int "Synthetic radar emit interval in seconds"
+	default 15
+	range 1 3600
+	help
+	  Interval between synthetic car.v1 detections from the radar stub.
+
+config NODIFYR_GAP_TELEMETRY
+	bool "Emit nodifyr.radar.gap.v1 on queue overflow"
+	default n
+	help
+	  When disabled (default), a full queue overwrites the oldest reading
+	  without emitting a gap summary. Enable only after nodifyr-app
+	  registers nodifyr.radar.gap.v1 — unknown device_type values 400 the
+	  entire batch today.
+
+config NODIFYR_HTTP_TIMEOUT_MS
+	int "HTTPS request timeout in milliseconds"
+	default 30000
+	range 5000 120000
+	help
+	  Timeout for DNS, connect, and HTTP exchange.
+
+endmenu
+
+module = NODIFYR
+module-str = Nodifyr cellular gateway
+source "$(ZEPHYR_BASE)/subsys/logging/Kconfig.template.log_config"
+
+source "Kconfig.zephyr"

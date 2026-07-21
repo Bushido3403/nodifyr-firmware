@@ -1,0 +1,25 @@
+cmake_minimum_required(VERSION 3.20.0)
+
+find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
+project(cellular_gateway)
+
+target_sources(app PRIVATE
+	src/main.c
+	src/lte.c
+	src/identity.c
+	src/https_client.c
+	src/pairing.c
+	src/telemetry.c
+	src/radar_stub.c
+	src/json_util.c
+)
+
+target_include_directories(app PRIVATE src)
+
+set(gen_dir ${CMAKE_CURRENT_BINARY_DIR}/certs)
+zephyr_include_directories(${gen_dir})
+generate_inc_file_for_target(
+	app
+	cert/isrgrootx1.pem
+	${gen_dir}/isrgrootx1.pem.inc
+)
