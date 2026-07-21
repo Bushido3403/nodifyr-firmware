@@ -1,0 +1,2 @@
+source /Users/bushidomac/Documents/nodifyr-firmware/esp-test/build/bootloader/gdbinit/symbols
+source /Users/bushidomac/Documents/nodifyr-firmware/esp-test/build/bootloader/gdbinit/connect
