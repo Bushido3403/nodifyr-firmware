@@ -68,8 +68,25 @@ static int response_cb(struct http_response *rsp, enum http_final_call final_dat
 		http_status = rsp->http_status_code;
 	}
 
-	if (rsp->header_start && rsp->data_len > 0 && retry_after_s == 0) {
-		retry_after_s = parse_retry_after(rsp->recv_buf, rsp->data_len);
+	/* NCS/Zephyr http_response no longer exposes header_start; headers
+	 * occupy recv_buf until body_frag_start when both are present.
+	 */
+	if (retry_after_s == 0 && rsp->recv_buf && rsp->data_len > 0) {
+		size_t header_len = rsp->data_len;
+
+		if (rsp->body_frag_start) {
+			if (rsp->body_frag_start > rsp->recv_buf) {
+				header_len = (size_t)(rsp->body_frag_start -
+						      rsp->recv_buf);
+			} else {
+				header_len = 0;
+			}
+		}
+
+		if (header_len > 0) {
+			retry_after_s = parse_retry_after(
+				(const char *)rsp->recv_buf, header_len);
+		}
 	}
 
 	if (rsp->body_frag_start && rsp->body_frag_len > 0) {

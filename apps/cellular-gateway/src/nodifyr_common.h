@@ -25,6 +25,7 @@ enum nodifyr_state {
 
 enum nodifyr_reading_kind {
 	NODIFYR_READING_CAR = 0,
+	NODIFYR_READING_CAR_SUMMARY,
 	NODIFYR_READING_GAP,
 };
 
@@ -35,6 +36,17 @@ struct nodifyr_car_fields {
 	uint8_t confidence_pct;
 	bool has_length_cm;
 	bool has_confidence_pct;
+};
+
+/** Aggregate window for upload_mode "summary" (same device_type). */
+struct nodifyr_car_summary_fields {
+	uint16_t car_count;
+	uint16_t avg_speed_centi_kph;
+	uint16_t min_speed_centi_kph;
+	uint16_t max_speed_centi_kph;
+	uint32_t window_sec;
+	bool has_min_max;
+	bool has_window_sec;
 };
 
 struct nodifyr_gap_fields {
@@ -51,6 +63,7 @@ struct nodifyr_reading {
 	char mac[NODIFYR_MAC_STR_LEN];
 	union {
 		struct nodifyr_car_fields car;
+		struct nodifyr_car_summary_fields summary;
 		struct nodifyr_gap_fields gap;
 	} fields;
 };

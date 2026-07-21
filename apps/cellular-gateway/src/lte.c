@@ -97,14 +97,19 @@ static void lte_handler(const struct lte_lc_evt *const evt)
 				"connected" : "idle");
 		break;
 
-	case LTE_LC_EVT_PDN_ACTIVATED:
-		LOG_INF("PDN activated (cid %d)", evt->pdn.cid);
-		mark_connected();
-		break;
-
-	case LTE_LC_EVT_PDN_DEACTIVATED:
-		LOG_WRN("PDN deactivated (cid %d)", evt->pdn.cid);
-		connected = false;
+	case LTE_LC_EVT_PDN:
+		switch (evt->pdn.type) {
+		case LTE_LC_EVT_PDN_ACTIVATED:
+			LOG_INF("PDN activated (cid %d)", evt->pdn.cid);
+			mark_connected();
+			break;
+		case LTE_LC_EVT_PDN_DEACTIVATED:
+			LOG_WRN("PDN deactivated (cid %d)", evt->pdn.cid);
+			connected = false;
+			break;
+		default:
+			break;
+		}
 		break;
 
 	default:

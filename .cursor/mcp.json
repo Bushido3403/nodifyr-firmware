@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "Nordic MCP": {
+      "url": "https://aidev.nordicsemi.com/mcp"
+    }
+  }
+}

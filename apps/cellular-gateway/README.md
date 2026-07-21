@@ -1,10 +1,14 @@
 # Nodifyr cellular gateway (nRF9151)
 
-Freestanding NCS **v3.4.0** application for the **nRF9151 DK** (`nrf9151dk/nrf9151/ns`, PCA10171).
+Freestanding NCS **v3.4.0** application for the **nRF9151 DK**
+(`nrf9151dk/nrf9151/ns`, PCA10171) and **Thingy:91 X**
+(`thingy91x/nrf9151/ns`, PCA20065).
 
 Attaches LTE via Hologram (`APN=hologram`, IPv4), pairs through the Nodifyr provision API, persists `api_key` / `api_url` in Settings/NVS, and uploads synthetic `nodifyr.radar.car.v1` readings over HTTPS with TLS validation (ISRG Root X1).
 
 Contract: [`docs/cellular-pairing-handoff.md`](../../docs/cellular-pairing-handoff.md).
+
+**After flash — pair with the web app:** [`docs/cellular-gateway-setup.md`](../../docs/cellular-gateway-setup.md).
 
 Validated against sibling **nodifyr-app** (`device-types.ts`, pair/status routes, telemetry schema):
 `nodifyr.radar.car.v1` allowlisted; `nodifyr.radar.gap.v1` **not** registered (gap Kconfig stays off);
@@ -29,6 +33,7 @@ apps/cellular-gateway/
   Kconfig
   sysbuild.conf
   boards/nrf9151dk_nrf9151_ns.conf
+  boards/thingy91x_nrf9151_ns.conf   # MINIMAL TF-M (factory partitions)
   cert/isrgrootx1.pem
   src/
     main.c          # BOOT → PAIRING | NORMAL | ERROR | FATAL
@@ -36,17 +41,39 @@ apps/cellular-gateway/
     identity.c      # Settings/NVS + IMEI hardware_id
     https_client.c  # TLS socket + http_client_req
     pairing.c       # POST /pair + GET /status
-    telemetry.c     # ring buffer + batch upload
+    device_config.c # GET /api/v1/config (upload mode + duty cycle)
+    telemetry.c     # ring buffer + detailed/summary + batch upload
     radar_stub.c    # synthetic car.v1 producer
     json_util.c
 ```
 
+## Runtime config (dashboard → device)
+
+After pairing, each telemetry cycle also fetches `GET /api/v1/config`:
+
+| Key | Effect |
+|-----|--------|
+| `upload_mode` | `detailed` = every detection; `summary` = one condensed reading per upload interval |
+| `upload_interval_sec` | How often to upload **and** check for config updates |
+
+In detailed mode, a full queue of **64** readings triggers an immediate upload
+(cloud batch limit). Summary mode aggregates all detections since the last
+upload — there is no per-event cap.
+
+Edit under **Devices → Configure**. Cost estimates use **$0.03/MB**.
+
 ## Dev pairing secret
 
-For bring-up only, seed a secret into empty flash:
+Lab default is hardcoded in [`prj.conf`](prj.conf):
+
+```text
+CONFIG_NODIFYR_PAIRING_SECRET="NODI-FYR1-DK91-BRNG"
+```
+
+Use that code in **Devices → Pair device**. Override at build time if needed:
 
 ```bash
-west build ... -- -DCONFIG_NODIFYR_PAIRING_SECRET=\"ABCD-EFGH-JKMN-PQRS\"
+west build ... -- -DCONFIG_NODIFYR_PAIRING_SECRET=\"YOUR-CODE-HERE\"
 ```
 
 Leave empty for release; production devices must be factory-provisioned into Settings.
@@ -93,7 +120,25 @@ nrfutil sdk-manager toolchain launch --ncs-version="$NCS_VERSION" \
 
 Artifact (sysbuild): `$BUILD_DIR/cellular-gateway/zephyr/zephyr.hex` (confirm with `ls`).
 
+### Thingy:91 X build
+
+Factory layout uses MCUboot + b0 and a tiny TF-M region — the Thingy board
+fragment sets `CONFIG_TFM_PROFILE_TYPE_MINIMAL=y` (do not reuse the DK SMALL
+profile).
+
+```bash
+export BUILD_DIR="$APP_DIR/build_thingy91x"
+nrfutil sdk-manager toolchain launch --ncs-version="$NCS_VERSION" \
+  --chdir "$NCS_DIR" -- \
+  west build -p -b thingy91x/nrf9151/ns --sysbuild \
+  -d "$BUILD_DIR" "$APP_DIR"
+```
+
+DFU zip: `$BUILD_DIR/dfu_application.zip`.
+
 ## Laptop: flash
+
+### nRF9151 DK (J-Link)
 
 ```bash
 nrfutil device list
@@ -103,6 +148,20 @@ nrfutil sdk-manager toolchain launch --ncs-version="$NCS_VERSION" \
 ```
 
 If multiple DKs are attached, add `--dev-id <SEGGER_SN>`.
+
+### Thingy:91 X (USB MCUboot — no on-board debugger)
+
+1. Hold **SW3** while power-cycling (or plugging USB) to enter serial recovery.
+2. Confirm the device shows as `THINGY91X_…` / `mcuBoot` in `nrfutil device list`.
+3. Program the application DFU zip:
+
+```bash
+nrfutil device program \
+  --firmware "$APP_DIR/build_thingy91x/dfu_application.zip" \
+  --serial-number THINGY91X_B5D670E85FA
+```
+
+Do **not** `west flash` a DK `merged.hex` to the Thingy’s USB serial port.
 
 ## Laptop: UART verify
 

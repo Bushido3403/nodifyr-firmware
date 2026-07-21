@@ -77,7 +77,45 @@ GET /api/v1/provision/pair/status?hardware_id=nrf-350457790012345&pairing_secret
 **Write-before-ack:** persist the key before doing anything else with the
 response; it is never returned again.
 
-### 3. Telemetry upload — `POST /api/v1/telemetry` (unchanged contract)
+### 3. Runtime config — `GET /api/v1/config`
+
+Fetched on the **same cadence as telemetry uploads** (after each upload cycle,
+including when the queue was empty). Auth is the same `X-Api-Key` header.
+
+```http
+GET /api/v1/config?since=<last_known_version>
+X-Api-Key: ngw_<48_hex_chars>
+```
+
+| Response | Meaning |
+|----------|---------|
+| `{"ok":true,"version":N,"unchanged":true}` | Config unchanged since `?since=N` |
+| `{"ok":true,"version":N,"updated_at":"...","config":{...}}` | New config — persist `version` + `config`, apply immediately |
+| `401` | Bad/missing API key |
+| `429` | Rate limited — back off |
+
+Config object:
+
+```json
+{
+  "upload_mode": "detailed",
+  "upload_interval_sec": 60
+}
+```
+
+| Key | Range | Firmware behavior |
+|-----|-------|-------------------|
+| `upload_mode` | `"detailed"` \| `"summary"` | Detailed: one reading per vehicle. Summary: one aggregate per upload interval |
+| `upload_interval_sec` | 10–86400 | How often to POST telemetry **and** refresh config |
+
+In detailed mode, reaching **64** queued readings triggers an immediate upload
+(cloud batch limit). Summary mode has no per-event cap — detections are
+aggregated into one reading for the interval.
+
+Persist the last applied `version` and pass it as `?since=` to keep unchanged
+responses tiny.
+
+### 4. Telemetry upload — `POST /api/v1/telemetry` (unchanged contract)
 
 ```http
 POST /api/v1/telemetry
@@ -129,7 +167,7 @@ Field contract for `nodifyr.radar.car.v1`:
 
 ```text
 BOOT
- ├─ api_key in storage?  ──yes──► NORMAL: radar capture → batch → upload every N sec
+ ├─ api_key in storage?  ──yes──► NORMAL
  └─ no
      └─ pairing_secret in storage?  ──no──► fatal config error (factory issue)
          └─ yes
@@ -138,6 +176,11 @@ BOOT
                  ├─ "approved" → persist api_key + api_url → NORMAL
                  ├─ "active" without local key → error state (support)
                  └─ 403 revoked → error state (stop polling)
+
+NORMAL (every upload_interval_sec, or sooner if detailed queue hits 64)
+ ├─ summary mode: flush aggregate for this interval
+ ├─ POST /api/v1/telemetry if queue non-empty
+ └─ GET /api/v1/config?since=<version>  (same cycle — not a separate timer)
 ```
 
 Customer-side flow for context: the user powers the device, then enters the

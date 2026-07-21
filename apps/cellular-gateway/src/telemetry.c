@@ -1,4 +1,5 @@
 #include "telemetry.h"
+#include "device_config.h"
 #include "https_client.h"
 
 #include <zephyr/kernel.h>
@@ -11,11 +12,14 @@
 #include <string.h>
 #include <errno.h>
 #include <stdint.h>
+#include <limits.h>
+
+#include <zephyr/sys/util.h>
 
 LOG_MODULE_REGISTER(nodifyr_telem, CONFIG_NODIFYR_LOG_LEVEL);
 
 #define QUEUE_SIZE CONFIG_NODIFYR_TELEMETRY_QUEUE_SIZE
-#define BATCH_MAX CONFIG_NODIFYR_TELEMETRY_BATCH_MAX
+#define BATCH_CAP_MAX CONFIG_NODIFYR_TELEMETRY_BATCH_MAX
 
 static struct nodifyr_reading queue[QUEUE_SIZE];
 static size_t q_head;
@@ -23,6 +27,16 @@ static size_t q_count;
 static uint32_t overflow_count;
 static int64_t last_overflow_log_ms;
 static struct k_mutex q_lock;
+
+/* Summary-mode accumulator (one open window). */
+static bool summary_open;
+static int64_t summary_window_start_ms;
+static uint32_t summary_count;
+static uint64_t summary_speed_sum;
+static uint16_t summary_min_speed;
+static uint16_t summary_max_speed;
+static uint16_t summary_seq;
+static struct k_mutex summary_lock;
 
 #if defined(CONFIG_NODIFYR_GAP_TELEMETRY)
 static void enqueue_gap_locked(uint32_t dropped, int64_t first_ts, int64_t last_ts,
@@ -67,9 +81,12 @@ static void enqueue_gap_locked(uint32_t dropped, int64_t first_ts, int64_t last_
 int nodifyr_telemetry_init(void)
 {
 	k_mutex_init(&q_lock);
+	k_mutex_init(&summary_lock);
 	q_head = 0;
 	q_count = 0;
 	overflow_count = 0;
+	summary_open = false;
+	summary_count = 0;
 	return 0;
 }
 
@@ -122,6 +139,163 @@ void nodifyr_telemetry_enqueue(const struct nodifyr_reading *reading)
 	q_count++;
 
 	k_mutex_unlock(&q_lock);
+}
+
+static void summary_reset_locked(void)
+{
+	summary_open = false;
+	summary_count = 0;
+	summary_speed_sum = 0;
+}
+
+static void summary_flush_locked(int64_t window_end_ms, uint32_t window_sec)
+{
+	struct nodifyr_reading r;
+
+	if (summary_count == 0) {
+		summary_reset_locked();
+		return;
+	}
+
+	memset(&r, 0, sizeof(r));
+	r.kind = NODIFYR_READING_CAR_SUMMARY;
+	r.ts = window_end_ms;
+	r.rssi = 0;
+	r.sequence = summary_seq;
+	strncpy(r.mac, NODIFYR_RADAR_MAC, sizeof(r.mac) - 1);
+	r.fields.summary.car_count =
+		(uint16_t)MIN(summary_count, (uint32_t)UINT16_MAX);
+	r.fields.summary.avg_speed_centi_kph =
+		(uint16_t)(summary_speed_sum / summary_count);
+	r.fields.summary.min_speed_centi_kph = summary_min_speed;
+	r.fields.summary.max_speed_centi_kph = summary_max_speed;
+	r.fields.summary.window_sec = window_sec;
+	r.fields.summary.has_min_max = true;
+	r.fields.summary.has_window_sec = true;
+
+	summary_reset_locked();
+
+	k_mutex_unlock(&summary_lock);
+	nodifyr_telemetry_enqueue(&r);
+	k_mutex_lock(&summary_lock, K_FOREVER);
+
+	LOG_INF("Summary flushed: cars=%u avg=%u window=%us",
+		r.fields.summary.car_count, r.fields.summary.avg_speed_centi_kph,
+		window_sec);
+}
+
+void nodifyr_telemetry_summary_flush(void)
+{
+	struct nodifyr_device_config c;
+	int64_t now_ms = 0;
+
+	nodifyr_device_config_get(&c);
+	(void)date_time_now(&now_ms);
+	if (now_ms <= 0) {
+		return;
+	}
+
+	k_mutex_lock(&summary_lock, K_FOREVER);
+	if (!summary_open || summary_count == 0) {
+		k_mutex_unlock(&summary_lock);
+		return;
+	}
+
+	if ((now_ms - summary_window_start_ms) <
+	    ((int64_t)c.upload_interval_sec * 1000)) {
+		k_mutex_unlock(&summary_lock);
+		return;
+	}
+
+	summary_flush_locked(summary_window_start_ms +
+				     ((int64_t)c.upload_interval_sec * 1000),
+			     (uint32_t)c.upload_interval_sec);
+	k_mutex_unlock(&summary_lock);
+}
+
+void nodifyr_telemetry_summary_flush_force(void)
+{
+	struct nodifyr_device_config c;
+	int64_t now_ms = 0;
+	uint32_t window_sec;
+
+	nodifyr_device_config_get(&c);
+	(void)date_time_now(&now_ms);
+
+	k_mutex_lock(&summary_lock, K_FOREVER);
+	if (!summary_open || summary_count == 0) {
+		k_mutex_unlock(&summary_lock);
+		return;
+	}
+
+	window_sec = (uint32_t)c.upload_interval_sec;
+	if (now_ms > summary_window_start_ms) {
+		window_sec =
+			(uint32_t)((now_ms - summary_window_start_ms) / 1000);
+		if (window_sec == 0) {
+			window_sec = 1;
+		}
+	}
+
+	summary_flush_locked(now_ms > 0 ? now_ms : summary_window_start_ms,
+			     window_sec);
+	k_mutex_unlock(&summary_lock);
+}
+
+void nodifyr_telemetry_observe_car(const struct nodifyr_reading *car)
+{
+	struct nodifyr_device_config c;
+	int64_t now_ms = 0;
+	uint16_t speed;
+
+	if (!car || car->kind != NODIFYR_READING_CAR) {
+		return;
+	}
+
+	nodifyr_device_config_get(&c);
+	if (c.upload_mode != NODIFYR_UPLOAD_SUMMARY) {
+		nodifyr_telemetry_enqueue(car);
+		return;
+	}
+
+	speed = car->fields.car.speed_centi_kph;
+	(void)date_time_now(&now_ms);
+	if (now_ms <= 0) {
+		now_ms = car->ts;
+	}
+
+	k_mutex_lock(&summary_lock, K_FOREVER);
+
+	if (summary_open &&
+	    (now_ms - summary_window_start_ms) >=
+		    ((int64_t)c.upload_interval_sec * 1000)) {
+		summary_flush_locked(summary_window_start_ms +
+					     ((int64_t)c.upload_interval_sec *
+					      1000),
+				     (uint32_t)c.upload_interval_sec);
+	}
+
+	if (!summary_open) {
+		summary_open = true;
+		summary_window_start_ms = now_ms;
+		summary_count = 0;
+		summary_speed_sum = 0;
+		summary_min_speed = speed;
+		summary_max_speed = speed;
+		summary_seq = car->sequence;
+	}
+
+	summary_count++;
+	summary_speed_sum += speed;
+	if (speed < summary_min_speed) {
+		summary_min_speed = speed;
+	}
+	if (speed > summary_max_speed) {
+		summary_max_speed = speed;
+	}
+	summary_seq = car->sequence;
+
+	k_mutex_unlock(&summary_lock);
 }
 
 static int json_add_i64(cJSON *obj, const char *key, int64_t value)
@@ -201,6 +375,25 @@ static cJSON *reading_to_json(const struct nodifyr_reading *r)
 			(void)json_add_i32(fields, "confidence_pct",
 					   r->fields.car.confidence_pct);
 		}
+	} else if (r->kind == NODIFYR_READING_CAR_SUMMARY) {
+		if (json_add_i32(fields, "car_count",
+				 r->fields.summary.car_count) ||
+		    json_add_i32(fields, "avg_speed_centi_kph",
+				 r->fields.summary.avg_speed_centi_kph)) {
+			cJSON_Delete(fields);
+			cJSON_Delete(obj);
+			return NULL;
+		}
+		if (r->fields.summary.has_min_max) {
+			(void)json_add_i32(fields, "min_speed_centi_kph",
+					   r->fields.summary.min_speed_centi_kph);
+			(void)json_add_i32(fields, "max_speed_centi_kph",
+					   r->fields.summary.max_speed_centi_kph);
+		}
+		if (r->fields.summary.has_window_sec) {
+			(void)json_add_i32(fields, "window_sec",
+					   (int32_t)r->fields.summary.window_sec);
+		}
 	} else {
 		if (json_add_i32(fields, "dropped_count",
 				 (int32_t)r->fields.gap.dropped_count) ||
@@ -266,8 +459,9 @@ static int parse_telemetry_url(const char *url, char *host, size_t host_len,
 enum nodifyr_upload_result nodifyr_telemetry_upload(const struct nodifyr_identity *id)
 {
 	size_t batch_n;
+	size_t batch_cap;
 	size_t i;
-	struct nodifyr_reading batch[BATCH_MAX];
+	struct nodifyr_reading batch[BATCH_CAP_MAX];
 	cJSON *root;
 	cJSON *readings;
 	char *payload;
@@ -289,8 +483,10 @@ enum nodifyr_upload_result nodifyr_telemetry_upload(const struct nodifyr_identit
 		return NODIFYR_UPLOAD_RETRY;
 	}
 
+	batch_cap = BATCH_CAP_MAX;
+
 	k_mutex_lock(&q_lock, K_FOREVER);
-	batch_n = q_count < BATCH_MAX ? q_count : BATCH_MAX;
+	batch_n = q_count < batch_cap ? q_count : batch_cap;
 	for (i = 0; i < batch_n; i++) {
 		batch[i] = queue[(q_head + i) % QUEUE_SIZE];
 	}

@@ -12,6 +12,7 @@ target_sources(app PRIVATE
 	src/telemetry.c
 	src/radar_stub.c
 	src/json_util.c
+	src/device_config.c
 )
 
 target_include_directories(app PRIVATE src)

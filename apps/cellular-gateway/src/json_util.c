@@ -34,3 +34,20 @@ bool nodifyr_json_get_bool(const cJSON *obj, const char *key, bool *out)
 	*out = cJSON_IsTrue(item);
 	return true;
 }
+
+bool nodifyr_json_get_int(const cJSON *obj, const char *key, int *out)
+{
+	const cJSON *item;
+
+	if (!obj || !key || !out) {
+		return false;
+	}
+
+	item = cJSON_GetObjectItemCaseSensitive(obj, key);
+	if (!cJSON_IsNumber(item)) {
+		return false;
+	}
+
+	*out = item->valueint;
+	return true;
+}
