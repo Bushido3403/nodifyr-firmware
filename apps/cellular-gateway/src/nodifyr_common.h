@@ -9,9 +9,7 @@
 #define NODIFYR_SECRET_MAX	65
 #define NODIFYR_API_KEY_MAX	64
 #define NODIFYR_API_URL_MAX	128
-#define NODIFYR_MAC_STR_LEN	18
 
-#define NODIFYR_RADAR_MAC	"02:00:00:00:00:01"
 #define NODIFYR_DEVICE_TYPE_CAR	"nodifyr.radar.car.v1"
 #define NODIFYR_DEVICE_TYPE_GAP	"nodifyr.radar.gap.v1"
 
@@ -60,7 +58,6 @@ struct nodifyr_reading {
 	int64_t ts;
 	int8_t rssi;
 	uint16_t sequence;
-	char mac[NODIFYR_MAC_STR_LEN];
 	union {
 		struct nodifyr_car_fields car;
 		struct nodifyr_car_summary_fields summary;

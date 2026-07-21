@@ -127,7 +127,6 @@ X-Api-Key: ngw_<48_hex_chars>
     {
       "ts": 1721500000123,
       "rssi": 0,
-      "mac": "02:00:00:00:00:01",
       "device_type": "nodifyr.radar.car.v1",
       "sequence": 101,
       "fields": {
@@ -150,12 +149,14 @@ Rules:
 - `400` means the schema rejected the payload — log and drop the batch (do not
   retry unchanged).
 
+Readings carry no `mac` field — the cloud keys sensor identity by the
+device's `hardware_id`, resolved from the API key.
+
 Field contract for `nodifyr.radar.car.v1`:
 
 | Field | Required | Range | Meaning |
 |-------|----------|-------|---------|
 | `ts` | yes | epoch ms | Detection time (network-synced clock) |
-| `mac` | yes | `xx:xx:xx:xx:xx:xx` | Stable synthetic id for the radar unit on this gateway (locally administered MAC is fine, e.g. `02:00:00:00:00:01`); not a BLE address |
 | `rssi` | yes | -128..127 | Signal-quality proxy or `0` if unused |
 | `sequence` | yes | 0..65535 | Rolling detection counter (wraps) |
 | `fields.speed_centi_kph` | yes | 0..65535 | Speed × 100 (45.20 km/h → `4520`) |
@@ -217,7 +218,7 @@ curl -sS 'https://app.nodifyr.io/api/v1/provision/pair/status?hardware_id=nrf-te
 curl -sS -X POST https://app.nodifyr.io/api/v1/telemetry \
   -H "X-Api-Key: ngw_<key>" \
   -H "Content-Type: application/json" \
-  -d '{"readings":[{"ts":1721500000123,"rssi":0,"mac":"02:00:00:00:00:01","device_type":"nodifyr.radar.car.v1","sequence":1,"fields":{"speed_centi_kph":4520,"direction_deg":180}}]}'
+  -d '{"readings":[{"ts":1721500000123,"rssi":0,"device_type":"nodifyr.radar.car.v1","sequence":1,"fields":{"speed_centi_kph":4520,"direction_deg":180}}]}'
 # → {"ok":true,"accepted":1}
 ```
 

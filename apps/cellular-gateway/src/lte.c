@@ -97,6 +97,16 @@ static void lte_handler(const struct lte_lc_evt *const evt)
 				"connected" : "idle");
 		break;
 
+	case LTE_LC_EVT_PSM_UPDATE:
+		LOG_INF("PSM: TAU %d s, active time %d s", evt->psm_cfg.tau,
+			evt->psm_cfg.active_time);
+		break;
+
+	case LTE_LC_EVT_EDRX_UPDATE:
+		LOG_INF("eDRX: mode %d, interval %d ms", evt->edrx_cfg.mode,
+			(int)(evt->edrx_cfg.edrx * 1000.0f));
+		break;
+
 	case LTE_LC_EVT_PDN:
 		switch (evt->pdn.type) {
 		case LTE_LC_EVT_PDN_ACTIVATED:

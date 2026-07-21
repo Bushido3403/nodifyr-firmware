@@ -1,4 +1,5 @@
 #include "telemetry.h"
+#include "battery.h"
 #include "device_config.h"
 #include "https_client.h"
 
@@ -27,6 +28,7 @@ static size_t q_count;
 static uint32_t overflow_count;
 static int64_t last_overflow_log_ms;
 static struct k_mutex q_lock;
+static struct k_sem q_notify;
 
 /* Summary-mode accumulator (one open window). */
 static bool summary_open;
@@ -70,7 +72,6 @@ static void enqueue_gap_locked(uint32_t dropped, int64_t first_ts, int64_t last_
 	slot->ts = last_ts;
 	slot->rssi = 0;
 	slot->sequence = sequence;
-	strncpy(slot->mac, NODIFYR_RADAR_MAC, sizeof(slot->mac) - 1);
 	slot->fields.gap.dropped_count = dropped;
 	slot->fields.gap.first_ts = first_ts;
 	slot->fields.gap.last_ts = last_ts;
@@ -82,6 +83,7 @@ int nodifyr_telemetry_init(void)
 {
 	k_mutex_init(&q_lock);
 	k_mutex_init(&summary_lock);
+	k_sem_init(&q_notify, 0, 1);
 	q_head = 0;
 	q_count = 0;
 	overflow_count = 0;
@@ -138,7 +140,34 @@ void nodifyr_telemetry_enqueue(const struct nodifyr_reading *reading)
 	queue[idx] = *reading;
 	q_count++;
 
+	if (q_count >= BATCH_CAP_MAX) {
+		k_sem_give(&q_notify);
+	}
+
 	k_mutex_unlock(&q_lock);
+}
+
+int nodifyr_telemetry_wait_queued(size_t threshold, k_timeout_t timeout)
+{
+	if (threshold == 0) {
+		return 0;
+	}
+
+	if (nodifyr_telemetry_queued() >= threshold) {
+		return 0;
+	}
+
+	while (nodifyr_telemetry_queued() < threshold) {
+		if (k_sem_take(&q_notify, timeout) != 0) {
+			return -EAGAIN;
+		}
+		if (!K_TIMEOUT_EQ(timeout, K_FOREVER)) {
+			/* One-shot wait for timed callers. */
+			break;
+		}
+	}
+
+	return (nodifyr_telemetry_queued() >= threshold) ? 0 : -EAGAIN;
 }
 
 static void summary_reset_locked(void)
@@ -162,7 +191,6 @@ static void summary_flush_locked(int64_t window_end_ms, uint32_t window_sec)
 	r.ts = window_end_ms;
 	r.rssi = 0;
 	r.sequence = summary_seq;
-	strncpy(r.mac, NODIFYR_RADAR_MAC, sizeof(r.mac) - 1);
 	r.fields.summary.car_count =
 		(uint16_t)MIN(summary_count, (uint32_t)UINT16_MAX);
 	r.fields.summary.avg_speed_centi_kph =
@@ -341,10 +369,12 @@ static cJSON *reading_to_json(const struct nodifyr_reading *r)
 	dtype = (r->kind == NODIFYR_READING_GAP) ? NODIFYR_DEVICE_TYPE_GAP :
 						   NODIFYR_DEVICE_TYPE_CAR;
 
-	/* Integer-only wire format (nodifyr-app normalize.ts Number.isInteger). */
+	/* Integer-only wire format (nodifyr-app normalize.ts Number.isInteger).
+	 * No "mac" field: the cloud keys radar identity by the hardware_id
+	 * resolved from the API key.
+	 */
 	if (json_add_i64(obj, "ts", r->ts) ||
 	    json_add_i32(obj, "rssi", r->rssi) ||
-	    !cJSON_AddStringToObject(obj, "mac", r->mac) ||
 	    !cJSON_AddStringToObject(obj, "device_type", dtype) ||
 	    json_add_i32(obj, "sequence", r->sequence)) {
 		cJSON_Delete(obj);
@@ -472,6 +502,8 @@ enum nodifyr_upload_result nodifyr_telemetry_upload(const struct nodifyr_identit
 	struct nodifyr_http_response resp;
 	int err;
 	int64_t now_ms = 0;
+	uint8_t battery_pct = 0;
+	bool have_battery;
 
 	if (!id || !id->has_api_key) {
 		return NODIFYR_UPLOAD_AUTH_ERROR;
@@ -483,6 +515,8 @@ enum nodifyr_upload_result nodifyr_telemetry_upload(const struct nodifyr_identit
 		return NODIFYR_UPLOAD_RETRY;
 	}
 
+	have_battery = nodifyr_battery_read_pct(&battery_pct);
+
 	batch_cap = BATCH_CAP_MAX;
 
 	k_mutex_lock(&q_lock, K_FOREVER);
@@ -492,7 +526,7 @@ enum nodifyr_upload_result nodifyr_telemetry_upload(const struct nodifyr_identit
 	}
 	k_mutex_unlock(&q_lock);
 
-	if (batch_n == 0) {
+	if (batch_n == 0 && !have_battery) {
 		return NODIFYR_UPLOAD_OK;
 	}
 
@@ -502,6 +536,20 @@ enum nodifyr_upload_result nodifyr_telemetry_upload(const struct nodifyr_identit
 		cJSON_Delete(root);
 		cJSON_Delete(readings);
 		return NODIFYR_UPLOAD_RETRY;
+	}
+
+	if (json_add_i64(root, "device_ts", now_ms)) {
+		cJSON_Delete(root);
+		cJSON_Delete(readings);
+		return NODIFYR_UPLOAD_RETRY;
+	}
+
+	if (have_battery) {
+		if (json_add_i32(root, "battery_pct", battery_pct)) {
+			cJSON_Delete(root);
+			cJSON_Delete(readings);
+			return NODIFYR_UPLOAD_RETRY;
+		}
 	}
 
 	for (i = 0; i < batch_n; i++) {
@@ -534,7 +582,8 @@ enum nodifyr_upload_result nodifyr_telemetry_upload(const struct nodifyr_identit
 	headers[1] = api_hdr;
 	headers[2] = NULL;
 
-	LOG_INF("Uploading %u readings", (unsigned)batch_n);
+	LOG_INF("Uploading %u readings%s", (unsigned)batch_n,
+		have_battery ? " (+battery)" : "");
 	err = nodifyr_https_request(host[0] ? host : NULL, "POST", path, NULL,
 				    payload, headers, &resp);
 	cJSON_free(payload);

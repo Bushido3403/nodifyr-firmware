@@ -13,6 +13,7 @@ target_sources(app PRIVATE
 	src/radar_stub.c
 	src/json_util.c
 	src/device_config.c
+	src/battery.c
 )
 
 target_include_directories(app PRIVATE src)

@@ -51,8 +51,6 @@ static void emit_one(void)
 	r.ts = now_ms;
 	r.rssi = (int8_t)prng_range_u16(0, 20) - 10; /* -10 .. +10 fill-in */
 	r.sequence = sequence++;
-	memcpy(r.mac, NODIFYR_RADAR_MAC, sizeof(r.mac));
-	r.mac[sizeof(r.mac) - 1] = '\0';
 
 	/* Plausible road traffic fill-in (schema: speed 0..65535 centi-kph,
 	 * direction 0..359, optional length/confidence).

@@ -56,9 +56,9 @@ After pairing, each telemetry cycle also fetches `GET /api/v1/config`:
 | `upload_mode` | `detailed` = every detection; `summary` = one condensed reading per upload interval |
 | `upload_interval_sec` | How often to upload **and** check for config updates |
 
-In detailed mode, a full queue of **64** readings triggers an immediate upload
-(cloud batch limit). Summary mode aggregates all detections since the last
-upload — there is no per-event cap.
+Each upload also sends `device_ts` (wall-clock epoch ms) and, on Thingy:91 X,
+`battery_pct` (0–100 from nPM1300 voltage). Empty `readings` is allowed for a
+battery heartbeat.
 
 Edit under **Devices → Configure**. Cost estimates use **$0.03/MB**.
 

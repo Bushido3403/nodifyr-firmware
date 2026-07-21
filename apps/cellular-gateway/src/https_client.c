@@ -23,6 +23,9 @@ static size_t body_len;
 static int http_status;
 static int retry_after_s;
 
+static int session_sock = -1;
+static char session_host[64];
+
 struct resp_ctx {
 	bool done;
 };
@@ -179,8 +182,6 @@ static int connect_host(const char *hostname, uint16_t port)
 		goto out;
 	}
 
-	sock = sock;
-
 out:
 	zsock_freeaddrinfo(res);
 	return sock;
@@ -194,6 +195,41 @@ static enum http_method method_from_str(const char *method)
 	return HTTP_GET;
 }
 
+void nodifyr_https_session_end(void)
+{
+	if (session_sock >= 0) {
+		zsock_close(session_sock);
+		session_sock = -1;
+	}
+	session_host[0] = '\0';
+}
+
+int nodifyr_https_session_begin(const char *host)
+{
+	int sock;
+
+	if (!host || host[0] == '\0') {
+		host = CONFIG_NODIFYR_CLOUD_HOST;
+	}
+
+	nodifyr_https_session_end();
+
+	sock = connect_host(host, 443);
+	if (sock < 0) {
+		return sock;
+	}
+
+	if (strlen(host) >= sizeof(session_host)) {
+		zsock_close(sock);
+		return -ENOMEM;
+	}
+
+	session_sock = sock;
+	strcpy(session_host, host);
+	LOG_DBG("TLS session open to %s", session_host);
+	return 0;
+}
+
 int nodifyr_https_request(const char *host,
 			  const char *method,
 			  const char *path,
@@ -204,13 +240,10 @@ int nodifyr_https_request(const char *host,
 {
 	int sock;
 	int err;
+	bool owned_sock = false;
 	struct http_request req = { 0 };
 	struct resp_ctx ctx = { 0 };
 	char url[256];
-	static const char *default_headers[] = {
-		"Content-Type: application/json\r\n",
-		NULL,
-	};
 	const char *const *headers = extra_headers;
 
 	if (!method || !path || !resp) {
@@ -219,12 +252,6 @@ int nodifyr_https_request(const char *host,
 
 	if (!host || host[0] == '\0') {
 		host = CONFIG_NODIFYR_CLOUD_HOST;
-	}
-
-	if (!headers) {
-		if (body) {
-			headers = default_headers;
-		}
 	}
 
 	if (query && query[0] != '\0') {
@@ -244,9 +271,35 @@ int nodifyr_https_request(const char *host,
 
 	LOG_INF("%s https://%s%s", method, host, url);
 
-	sock = connect_host(host, 443);
-	if (sock < 0) {
-		return sock;
+	if (session_sock >= 0 && strcmp(session_host, host) == 0) {
+		sock = session_sock;
+	} else {
+		sock = connect_host(host, 443);
+		if (sock < 0) {
+			return sock;
+		}
+		owned_sock = true;
+	}
+
+	/* Build header list; append keep-alive when reusing a TLS session. */
+	{
+		static const char *merged[8];
+		int n = 0;
+
+		if (headers) {
+			while (headers[n] != NULL && n < 6) {
+				merged[n] = headers[n];
+				n++;
+			}
+		} else if (body) {
+			merged[n++] = "Content-Type: application/json\r\n";
+		}
+
+		if (!owned_sock) {
+			merged[n++] = "Connection: keep-alive\r\n";
+		}
+		merged[n] = NULL;
+		headers = merged;
 	}
 
 	req.method = method_from_str(method);
@@ -256,7 +309,7 @@ int nodifyr_https_request(const char *host,
 	req.response = response_cb;
 	req.recv_buf = recv_buf;
 	req.recv_buf_len = sizeof(recv_buf);
-	req.header_fields = headers ? (const char **)headers : NULL;
+	req.header_fields = (const char **)headers;
 
 	if (body) {
 		req.payload = body;
@@ -264,10 +317,16 @@ int nodifyr_https_request(const char *host,
 	}
 
 	err = http_client_req(sock, &req, CONFIG_NODIFYR_HTTP_TIMEOUT_MS, &ctx);
-	zsock_close(sock);
+	if (owned_sock) {
+		zsock_close(sock);
+	}
 
 	if (err < 0) {
 		LOG_ERR("http_client_req: %d", err);
+		if (!owned_sock) {
+			/* Session likely broken; drop it. */
+			nodifyr_https_session_end();
+		}
 		return err;
 	}
 
